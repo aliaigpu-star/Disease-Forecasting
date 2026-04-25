@@ -546,26 +546,33 @@ def render_floating_chat():
         typing.innerText = 'Thinking...';
         msgs.appendChild(typing);
 
-        try {
-            // Talk DIRECTLY to Gemini API (No backend needed!)
-            const apiKey = '""" + str(st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))) + """';
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-            
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: `""" + SYSTEM_PROMPT.replace("\n", " ").replace("'", "\\'") + """\n\nUser Question: ${msg}` }] }]
-                })
-            });
-            const data = await response.json();
-            if (data.error) {
-                typing.innerText = "API Error: " + data.error.message;
-            } else {
-                typing.innerText = data.candidates[0].content.parts[0].text;
+        const apiKey = '""" + str(st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))) + """';
+        const models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"];
+        let success = false;
+
+        for (const modelName of models) {
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: `""" + SYSTEM_PROMPT.replace("\n", " ").replace("'", "\\'") + """\n\nUser Question: ${msg}` }] }]
+                    })
+                });
+                const data = await response.json();
+                if (data.candidates && data.candidates[0].content.parts[0].text) {
+                    typing.innerText = data.candidates[0].content.parts[0].text;
+                    success = true;
+                    break;
+                }
+            } catch (e) {
+                console.log(`Model ${modelName} failed, trying next...`);
             }
-        } catch (e) {
-            typing.innerText = "System Error: " + e.message;
+        }
+
+        if (!success) {
+            typing.innerText = "Error: All AI models are currently unavailable. Please check your API key or quota.";
         }
         msgs.scrollTop = msgs.scrollHeight;
     }
