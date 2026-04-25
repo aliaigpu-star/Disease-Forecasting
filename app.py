@@ -187,22 +187,42 @@ st.markdown("""
 # ── FLOATING CHAT CSS ────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* BREAK THE CHAT OUT OF THE SIDEBAR AND MAKE IT FLOAT */
-    div[data-testid="stExpander"]:has(p:contains("🤖 AI Chat Assistant")) {
+    /* THE FLOATING BUBBLE BUTTON */
+    div.stButton > button[key="chat_bubble_btn"] {
         position: fixed !important;
-        bottom: 20px !important;
-        right: 20px !important;
-        width: 350px !important;
-        z-index: 1000000 !important;
+        bottom: 25px !important;
+        right: 25px !important;
+        width: 60px !important;
+        height: 60px !important;
+        border-radius: 50% !important;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+        color: white !important;
+        font-size: 28px !important;
+        z-index: 1000001 !important;
+        border: none !important;
+        box-shadow: 0 4px 15px rgba(99,102,241,0.4) !important;
+        transition: transform 0.2s !important;
+    }
+    div.stButton > button[key="chat_bubble_btn"]:hover {
+        transform: scale(1.1) !important;
+    }
+
+    /* THE FLOATING CHAT WINDOW */
+    div[data-testid="stVerticalBlock"]:has(div[data-testid="stChatInput"]) {
+        position: fixed !important;
+        bottom: 95px !important;
+        right: 25px !important;
+        width: 380px !important;
+        height: 500px !important;
         background: #111827 !important;
         border: 1px solid #334155 !important;
-        border-radius: 12px !important;
+        border-radius: 16px !important;
+        z-index: 1000000 !important;
         box-shadow: 0 8px 32px rgba(0,0,0,0.5) !important;
-        color: white !important;
-    }
-    div[data-testid="stExpander"]:has(p:contains("🤖 AI Chat Assistant")) summary p {
-        color: #1F4E79 !important; /* Make title dark and visible */
-        font-weight: 700 !important;
+        padding: 15px !important;
+        overflow: hidden !important;
+        display: flex !important;
+        flex-direction: column !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -466,50 +486,57 @@ def render_sidebar(data, df_summary, df_trend):
         st.markdown(f"**300** total models trained")
 
         st.markdown("---")
-        # THIS IS THE FLOATING CHAT (using CSS to pop it out of the sidebar)
-        with st.expander("🤖 **AI Chat Assistant**", expanded=False):
-            st.markdown("<small>Ask about trends or capacity</small>", unsafe_allow_html=True)
-            
-            # Initialize chat history
-            if "messages" not in st.session_state:
-                st.session_state.messages = [{"role": "assistant", "content": "Hi! How can I help you with the forecast data?"}]
-            
-            # Show chat history (limit to last 5 for sidebar)
-            for msg in st.session_state.messages[-5:]:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-            
-            if prompt := st.chat_input("Ask AI...", key="floating_chat_input"):
-                st.session_state.messages.append({"role": "user", "content": prompt})
+        # Initialize chat history and toggle state
+        if "messages" not in st.session_state:
+            st.session_state.messages = [{"role": "assistant", "content": "Hi! I'm your Gemini 2.5 AI Assistant. How can I help you today?"}]
+        if "show_chat" not in st.session_state:
+            st.session_state.show_chat = False
+
+        # THE FLOATING BUBBLE (placed in sidebar to keep it rendered)
+        if st.button("💬", key="chat_bubble_btn"):
+            st.session_state.show_chat = not st.session_state.show_chat
+            st.rerun()
+
+        # THE FLOATING CHAT WINDOW
+        if st.session_state.show_chat:
+            with st.container():
+                st.markdown("<h4 style='color:white;margin-top:0;'>🤖 AI Assistant</h4>", unsafe_allow_html=True)
                 
-                # Generate response
-                with st.spinner("Thinking..."):
-                    api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
-                    if api_key:
-                        try:
-                            genai.configure(api_key=api_key)
-                            MODELS = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
-                            ctx = build_chat_context(data)
-                            full_p = f"{SYSTEM_PROMPT}\n\nContext:\n{ctx}\n\nUser: {prompt}"
-                            
-                            success = False
-                            for m_name in MODELS:
-                                try:
-                                    m = genai.GenerativeModel(m_name)
-                                    res = m.generate_content(full_p)
-                                    st.session_state.messages.append({"role": "assistant", "content": res.text})
-                                    success = True
-                                    st.rerun()
-                                    break
-                                except Exception as e_inner: 
-                                    last_err = str(e_inner)
-                                    continue
-                            if not success:
-                                st.error(f"Models unavailable. Error: {last_err}")
-                        except Exception as e:
-                            st.error(f"System Error: {e}")
-                    else:
-                        st.error("API Key missing in Secrets")
+                # Container for scrollable messages
+                chat_placeholder = st.container(height=350)
+                with chat_placeholder:
+                    for msg in st.session_state.messages:
+                        with st.chat_message(msg["role"]):
+                            st.markdown(msg["content"])
+                
+                if prompt := st.chat_input("Ask AI...", key="floating_chat_input"):
+                    st.session_state.messages.append({"role": "user", "content": prompt})
+                    
+                    with st.spinner("Thinking..."):
+                        api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+                        if api_key:
+                            try:
+                                genai.configure(api_key=api_key)
+                                MODELS = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+                                ctx = build_chat_context(data)
+                                full_p = f"{SYSTEM_PROMPT}\n\nContext:\n{ctx}\n\nUser: {prompt}"
+                                
+                                success = False
+                                for m_name in MODELS:
+                                    try:
+                                        m = genai.GenerativeModel(m_name)
+                                        res = m.generate_content(full_p)
+                                        st.session_state.messages.append({"role": "assistant", "content": res.text})
+                                        success = True
+                                        st.rerun()
+                                        break
+                                    except: continue
+                                if not success:
+                                    st.error("AI Busy. Try again later.")
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                        else:
+                            st.error("API Key missing")
 
     return page, selected_cat, horizon
 
