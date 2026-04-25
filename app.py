@@ -488,7 +488,7 @@ def render_sidebar(data, df_summary, df_trend):
                     if api_key:
                         try:
                             genai.configure(api_key=api_key)
-                            MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
+                            MODELS = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"]
                             ctx = build_chat_context(data)
                             full_p = f"{SYSTEM_PROMPT}\n\nContext:\n{ctx}\n\nUser: {prompt}"
                             
