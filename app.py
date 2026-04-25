@@ -548,22 +548,24 @@ def render_floating_chat():
 
         try {
             // Talk DIRECTLY to Gemini API (No backend needed!)
-            // We use st.secrets for Cloud deployment and os.getenv for local dev
-            const apiKey = '""" + st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", "")) + """';
+            const apiKey = '""" + str(st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))) + """';
             const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
             
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    contents: [{ parts: [{ text: `""" + SYSTEM_PROMPT.replace("\n", " ") + """\n\nUser Question: ${msg}` }] }]
+                    contents: [{ parts: [{ text: `""" + SYSTEM_PROMPT.replace("\n", " ").replace("'", "\\'") + """\n\nUser Question: ${msg}` }] }]
                 })
             });
             const data = await response.json();
-            const reply = data.candidates[0].content.parts[0].text;
-            typing.innerText = reply;
+            if (data.error) {
+                typing.innerText = "API Error: " + data.error.message;
+            } else {
+                typing.innerText = data.candidates[0].content.parts[0].text;
+            }
         } catch (e) {
-            typing.innerText = "Error: AI Assistant unavailable. Check your API Key in .env";
+            typing.innerText = "System Error: " + e.message;
         }
         msgs.scrollTop = msgs.scrollHeight;
     }
