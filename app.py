@@ -16,6 +16,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import google.generativeai as genai
 import streamlit.components.v1 as components
+from streamlit.errors import StreamlitSecretNotFoundError
 
 load_dotenv()
 
@@ -336,6 +337,38 @@ def compute_trend_growth(data: dict, df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("growth_%", ascending=False)
 
 
+@st.cache_data(show_spinner=False)
+def compute_trend_growth_for_horizon(data: dict, horizon: str) -> pd.DataFrame:
+    """
+    Compute growth % for the selected horizon using case_count forecasts.
+    Growth is measured from first to last forecast point for each disease.
+    """
+    rows = []
+    for name, info in data.items():
+        m = info.get("models", {}).get("case_count", {})
+        if "error" in m or not m:
+            continue
+        preds = m.get("forecasts", {}).get(horizon, [])
+        if len(preds) < 2:
+            continue
+
+        vals = [p["yhat"] for p in preds]
+        first = vals[0]
+        last = vals[-1]
+        growth = ((last - first) / (abs(first) + 1e-6)) * 100
+        rows.append({
+            "disease_name": name,
+            "disease_category": info.get("disease_category", "Unknown"),
+            "growth_%": round(growth, 1),
+            "first_point": round(first, 1),
+            "last_point": round(last, 1),
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=["disease_name", "disease_category", "growth_%", "first_point", "last_point"])
+    return pd.DataFrame(rows).sort_values("growth_%", ascending=False)
+
+
 # ── CHART HELPERS ────────────────────────────────────────────────────────────
 
 def forecast_chart(dates, yhats, lowers, uppers, title, y_label, color=SECONDARY):
@@ -468,7 +501,10 @@ def render_sidebar(data, df_summary, df_trend):
 
 def render_floating_chat(data):
     """Render a beautiful floating chat bubble + popup window using pure HTML/CSS/JS."""
-    api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+    except StreamlitSecretNotFoundError:
+        api_key = os.getenv("GEMINI_API_KEY", "")
     ctx = build_chat_context(data).replace("'", "\\'").replace("\n", " ")[:2000]
     prompt_prefix = SYSTEM_PROMPT.replace("'", "\\'").replace("\n", " ")
 
@@ -760,14 +796,18 @@ def page_disease_explorer(data, df_summary, horizon, selected_cat):
     mape_cc  = cc_model.get("metrics", {}).get("MAPE_%", "N/A") if "metrics" in cc_model else "N/A"
     mape_bd  = bd_model.get("metrics", {}).get("MAPE_%", "N/A") if "metrics" in bd_model else "N/A"
 
-    cc_1y   = sum(p["yhat"] for p in cc_model.get("forecasts", {}).get("1_year", []))
-    bd_1y   = sum(p["yhat"] for p in bd_model.get("forecasts", {}).get("1_year", []))
-    los_avg = np.mean([p["yhat"] for p in los_model.get("forecasts", {}).get("1_year", [])]) if los_model.get("forecasts", {}).get("1_year") else 0
+    cc_vals = [p["yhat"] for p in cc_model.get("forecasts", {}).get(horizon, [])]
+    bd_vals = [p["yhat"] for p in bd_model.get("forecasts", {}).get(horizon, [])]
+    los_vals = [p["yhat"] for p in los_model.get("forecasts", {}).get(horizon, [])]
+    cc_total = sum(cc_vals) if cc_vals else 0
+    bd_total = sum(bd_vals) if bd_vals else 0
+    los_avg = np.mean(los_vals) if los_vals else 0
+    hz_label = horizon.replace("_", " ").title()
 
     with c1: st.markdown(metric_card("Category", cat, f"{hist} months of history"), unsafe_allow_html=True)
-    with c2: st.markdown(metric_card("Forecast Cases (1 Year)", f"{int(cc_1y):,}", f"Model accuracy: {100 - mape_cc:.0f}%" if mape_cc != "N/A" else ""), unsafe_allow_html=True)
-    with c3: st.markdown(metric_card("Bed-Days Demand (1 Year)", f"{int(bd_1y):,}", f"MAPE: {mape_bd}%", "orange"), unsafe_allow_html=True)
-    with c4: st.markdown(metric_card("Avg Length of Stay", f"{los_avg:.1f} days", "Predicted next 12 months", "green"), unsafe_allow_html=True)
+    with c2: st.markdown(metric_card(f"Forecast Cases ({hz_label})", f"{int(cc_total):,}", f"Model accuracy: {100 - mape_cc:.0f}%" if mape_cc != "N/A" else ""), unsafe_allow_html=True)
+    with c3: st.markdown(metric_card(f"Bed-Days Demand ({hz_label})", f"{int(bd_total):,}", f"MAPE: {mape_bd}%", "orange"), unsafe_allow_html=True)
+    with c4: st.markdown(metric_card(f"Avg Length of Stay ({hz_label})", f"{los_avg:.1f} days", "Selected forecast horizon", "green"), unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -889,11 +929,15 @@ def page_top_diseases(data, df_summary, selected_cat, horizon):
 
 def page_growth_trends(data, df_summary, df_trend, selected_cat, horizon):
     st.markdown('<div class="page-title">📈 Growth & Trends</div>', unsafe_allow_html=True)
-    st.markdown('<div class="page-subtitle">Diseases with the fastest predicted growth over the next 3 years</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="page-subtitle">Diseases with the fastest predicted growth over the selected horizon ({horizon.replace("_", " ").title()})</div>', unsafe_allow_html=True)
 
-    df_t = df_trend.copy()
+    df_t = compute_trend_growth_for_horizon(data, horizon)
     if selected_cat != "All":
         df_t = df_t[df_t["disease_category"] == selected_cat]
+
+    if df_t.empty:
+        st.info("Not enough forecast points to compute growth for this horizon. Try 1 Year or 3 Years.")
+        return
 
     col1, col2 = st.columns(2)
 
@@ -918,7 +962,7 @@ def page_growth_trends(data, df_summary, df_trend, selected_cat, horizon):
                 plot_bgcolor="white", paper_bgcolor="white",
                 yaxis=dict(autorange="reversed"),
             )
-            fig.update_xaxes(showgrid=True, gridcolor="#F3F4F6", title="Growth % (early vs late 3-year forecast)")
+            fig.update_xaxes(showgrid=True, gridcolor="#F3F4F6", title=f"Growth % ({horizon.replace('_', ' ').title()} first vs last point)")
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
@@ -956,7 +1000,7 @@ def page_growth_trends(data, df_summary, df_trend, selected_cat, horizon):
         size=beds_col,
         color="disease_category",
         hover_name="disease_name",
-        labels={"growth_%": "Predicted Growth % (3yr)", cases_col: f"Forecast Cases ({horizon.replace('_', ' ')})"},
+        labels={"growth_%": f"Predicted Growth % ({horizon.replace('_', ' ')})", cases_col: f"Forecast Cases ({horizon.replace('_', ' ')})"},
         title="Growth Rate vs Volume — bubble size = bed-days",
         height=420,
         color_discrete_sequence=px.colors.qualitative.Set2,
